@@ -171,6 +171,10 @@ def deal_damage(world, target: Entity, amount: int, kind: str, owner="player", a
     if not is_player and not target.alive:
         world.stats["targets"] += 1
         world.room.refresh_gates(world.enemies)
+        if world.history.recording and not any(e.alive and e.group == target.group for e in world.enemies):
+            world.observe("encounter_cleared", group=target.group,
+                          required_for_exit=any(group == target.group for group, _ in world.room.gates),
+                          gates=sorted(world.room.open_gates), position=tuple(target.position))
         world.events.emit("enemy_defeated", timestamp=world.time, entity_id=target.entity_id,
                           position=tuple(target.position), owner=owner, action_id=action_id)
         world.impact(target.position, "defeat")
@@ -241,6 +245,14 @@ def resolve_enemy_projectile(world, projectile, stop_at=2.0):
         projectile.position = projectile.previous.lerp(projectile.position, body_contact)
         deal_damage(world, player, projectile.damage, projectile.kind, "enemy")
         projectile.alive = False
+    elif (body_contact is None and defender is None and player.alive and world.history.recording
+          and getattr(player.state, "name", "") == "DASHING" and hasattr(world, "before_move")):
+        # Compare this step's actual path with the collision had the ninja stayed still.
+        stationary = segment_circle(projectile.previous, projectile.position, world.before_move,
+                                    player.radius + projectile.radius)
+        if stationary is not None and stationary < stop_at and not getattr(projectile, "recorded_dodge", False):
+            projectile.recorded_dodge = True
+            world.observe("dash_avoided_bolt", position=tuple(player.position))
     elif defender is not None:
         world.stats["deflections"] += 1
         projectile.position = projectile.previous.lerp(projectile.position, first_contact)
@@ -298,10 +310,16 @@ def resolve_projectiles(world, dt: float) -> None:
             fraction, screen = obstacle
             projectile.position = start.lerp(end, fraction)
             projectile.alive = False
+            if projectile.kind == "shuriken" and world.history.recording:
+                world.observe("projectile_missed", owner=projectile.owner, action_id=projectile.action_id,
+                              reason="bamboo" if screen is not None else "wall", position=tuple(projectile.position))
             if screen is not None:
                 damage_bamboo(world, screen, position=projectile.position)
             else:
                 world.impact(projectile.position, "wall")
         if projectile.expired:
+            if projectile.alive and projectile.kind == "shuriken" and world.history.recording:
+                world.observe("projectile_missed", owner=projectile.owner, action_id=projectile.action_id,
+                              reason="range", position=tuple(projectile.position))
             projectile.alive = False
     world.projectiles = [projectile for projectile in world.projectiles if projectile.alive]

@@ -275,18 +275,7 @@
       "Clear the two seal archers; exit east."
     ]
   ],
-  "signs": [
-    [
-      "GALLERY ^",
-      5,
-      13
-    ],
-    [
-      "CAUSEWAY >",
-      9,
-      17
-    ]
-  ],
+  "signs": [],
   "choices": [
     {
       "name": "Causeway or gallery",
@@ -310,6 +299,16 @@
           15,
           13,
           3
+        ]
+      ],
+      "signpost": [
+        [
+          "north",
+          "Long gallery · more cover"
+        ],
+        [
+          "east",
+          "Short causeway · two archers"
         ]
       ]
     }

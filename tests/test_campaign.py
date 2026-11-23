@@ -210,3 +210,42 @@ def test_selector_map_pause_and_direct_loading(display, monkeypatch):
     game.world.player.health = 0
     command("confirm")
     assert game.world.player.alive
+
+
+@pytest.mark.parametrize("compact", [True, False])
+def test_navigation_marks_live_visible_enemies_and_moves_with_player(display, compact):
+    from shroud import navigation as nav
+
+    world = Sandbox(room=Room(load_level("temple_01", "marsh")))
+    area = pygame.Rect(10, 10, 200, 120) if compact else pygame.Rect(50, 50, 1000, 600)
+    chart = nav.RoomMap(world.room, area, compact=compact)
+    surface = pygame.Surface((S.WIDTH, S.HEIGHT))
+    enemy = world.enemies[0]
+    enemy_pixel = tuple(int(v) for v in chart.point(enemy.position))
+    chart.draw(surface, world)
+    assert surface.get_at(enemy_pixel)[:3] != nav.ENEMY
+    world.player.position = enemy.position - Vector2(240, 0)
+    chart.draw(surface, world)
+    assert surface.get_at(enemy_pixel)[:3] == nav.ENEMY
+    player_pixel = tuple(round(v) for v in chart.point(world.player.position))
+    assert surface.get_at(player_pixel)[:3] == nav.UI.PAPER
+    enemy.health = 0
+    world.player.position += Vector2(0, 160)
+    chart.draw(surface, world)
+    assert surface.get_at(enemy_pixel)[:3] != nav.ENEMY
+    assert surface.get_at(player_pixel)[:3] != nav.UI.PAPER
+
+
+def test_signed_route_lengths_match_walkable_forks():
+    for level_id in ("temple_01", "misty_01"):
+        room = Room(load_level(level_id))
+        fork = room.data["choices"][0]
+        paths = {}
+        for index, (direction, label) in enumerate(fork["signpost"]):
+            other = pygame.FRect([n * S.TILE_SIZE for n in fork["branches"][1 - index]])
+            parents = reachable(room, Vector2(fork["start"]) * S.TILE_SIZE, other)
+            path = path_to(parents, Vector2(fork["end"]) * S.TILE_SIZE)
+            assert path and any(pygame.FRect(fork["branches"][index]).collidepoint(p / S.TILE_SIZE) for p in path)
+            paths[direction] = len(path)
+            assert label.startswith("Short" if direction == "east" else "Long")
+        assert paths["east"] < paths["north"]

@@ -29,6 +29,16 @@ REWARDS = {
     "frenzy": Reward("Frenzy", "burst", description="Recover twice as fast. Slash and throw cooldowns fall by 35%."),
     "flow": Reward("Flow", "burst", description="Alternate slash and throw for +40% damage. Your first attack starts the chain."),
 }
+TECHNIQUE_HELP = {
+    "sharpening": "Your sword hits harder.",
+    "reach": "Your sword reaches farther.",
+    "quick_charge": "Hold the sword for less time to charge a full slash.",
+    "footwork": "Dash again sooner.",
+    "rapid_throw": "Throw your next shuriken sooner.",
+    "long_throw": "Your shuriken travels farther.",
+    "lingering_echo": "Your shadow waits longer to copy an attack.",
+    "parry": "A slash gives you more time to deflect a shot.",
+}
 RANKS = ("—", "I", "II", "III")
 BURST_DURATION = 10.0
 INTERACT_RADIUS = 100.0
@@ -128,7 +138,7 @@ class RunRewards:
         stat = REWARDS[key].stat
         return getattr(self.effective(), stat), getattr(self.effective(ranks), stat)
 
-    def activate(self, events):
+    def activate(self, events, trigger="manual"):
         if self.active or self.stored is None:
             return False
         prior = self.snapshot()
@@ -137,7 +147,7 @@ class RunRewards:
         self.remaining = BURST_DURATION
         self.expired = None
         self.expired_time = 0.0
-        events.emit("burst_activated", reward=self.active, duration=BURST_DURATION, prior=prior)
+        events.emit("burst_activated", reward=self.active, duration=BURST_DURATION, prior=prior, trigger=trigger)
         return True
 
     def tick(self, dt, events):
@@ -186,6 +196,7 @@ class Cache:
     opening: float = 0.0
     offer_id: int | None = None
     offer_details: tuple | None = None
+    pool: tuple | None = None
 
     def available(self, world):
         return not self.claimed and set(self.requires) <= world.room.open_gates
@@ -195,6 +206,8 @@ class Cache:
             return None
         if self.offers is None:
             pool = rewards.eligible(self.category)
+            if self.pool is not None:
+                pool = [key for key in pool if key in self.pool]
             if len(pool) < 2:
                 return None  # Leave the cache usable if eligibility changes later.
             self.offers = tuple(rewards.rng.sample(pool, 2))

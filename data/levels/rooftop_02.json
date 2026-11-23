@@ -271,18 +271,7 @@
       "Clear both ridge archers to unlock the lantern roof."
     ]
   ],
-  "signs": [
-    [
-      "RIDGE SHORTCUT ^",
-      8,
-      14
-    ],
-    [
-      "SWITCHBACK >",
-      12,
-      16
-    ]
-  ],
+  "signs": [],
   "choices": [
     {
       "name": "Ladder roof or switchback",
@@ -306,6 +295,16 @@
           7,
           3,
           5
+        ]
+      ],
+      "signpost": [
+        [
+          "north",
+          "Narrow ridge"
+        ],
+        [
+          "east",
+          "Wide switchback · archers"
         ]
       ]
     }

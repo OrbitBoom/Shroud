@@ -1,9 +1,15 @@
-"""Bounded, detached per-run observations. No scoring, persistence or network IO."""
+"""Bounded, detached per-run observations. Optionally forward snapshots to the local journal."""
 from collections import deque
 from copy import deepcopy
+import sqlite3
+import sys
 from shroud import settings as S
 
 EVENT_KINDS = {
+    "route_offered": "opportunity", "route_taken": "choice", "area_sample": "movement",
+    "wind_changed": "environment", "retry_started": "progress", "checkpoint_reached": "progress",
+    "level_completed": "progress", "encounter_cleared": "progress", "enemy_warning": "opportunity",
+    "enemy_fired": "environment", "projectile_missed": "performance", "dash_avoided_bolt": "performance",
     "developer_setup": "setup",
     "room_entered": "progress", "run_ended": "progress",
     "reward_offered": "opportunity", "reward_reopened": "opportunity", "reward_confirmed": "choice",
@@ -18,10 +24,24 @@ class RunHistory:
     def __init__(self, limit=S.HISTORY_LIMIT):
         if limit < 1:
             raise ValueError("History limit must be positive")
+        self.sink = None
         self.limit = limit
         self.clear()
 
-    def clear(self):
+    @property
+    def recording(self):
+        return self.sink is not None and self.sink.enabled
+
+    def forward(self, method, *args):
+        if self.recording:
+            try:
+                getattr(self.sink, method)(*args)
+            except sqlite3.Error as error:
+                self.sink.enabled = False
+                print(f"Local recording stopped: {error}", file=sys.stderr)
+
+    def clear(self, reason="restart"):
+        self.forward("next_attempt", reason)
         self._records = deque(maxlen=self.limit)
         self.elapsed = 0.0
         self.sequence = self.action_serial = self.dropped = 0
@@ -57,6 +77,7 @@ class RunHistory:
                                           timestamp=self.elapsed, event=event,
                                           kind=EVENT_KINDS[event], developer=self.developer,
                                           context=context, details=payload)))
+        self.forward("record", self._records[-1])
 
     def finish(self, world, reason):
         if self.status == "playing":

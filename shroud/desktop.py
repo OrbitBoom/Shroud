@@ -10,7 +10,9 @@ class Desktop:
         self.windowed=(round(1280*scale),round(800*scale))
         self.fullscreen=False
         self.window=pygame.display.set_mode(self.windowed,pygame.RESIZABLE)
-        self.canvas=pygame.Surface((1280,800))
+        # An implicit format can inherit the window's alpha mask on macOS.
+        # Use opaque RGB so the scaled frame fills the destination alpha before text is blended.
+        self.canvas=pygame.Surface((1280,800),depth=32)
         icon=pygame.image.load(str(Path(__file__).resolve().parents[1] / 'assets/powerups/icon_lingering_echo.png'))
         pygame.display.set_icon(icon)
         self.layout()
@@ -24,6 +26,16 @@ class Desktop:
     def point(self,pos):
         return ((pos[0]-self.viewport.x)/self.scale,(pos[1]-self.viewport.y)/self.scale)
 
+    def toggle_fullscreen(self):
+        try:
+            self.fullscreen = not self.fullscreen
+            self.window=pygame.display.set_mode((0,0) if self.fullscreen else self.windowed,
+                                               pygame.FULLSCREEN if self.fullscreen else pygame.RESIZABLE)
+        except pygame.error:
+            self.fullscreen=False
+            self.window=pygame.display.set_mode(self.windowed,pygame.RESIZABLE)
+        self.layout()
+
     def events(self,events):
         result=[]
         for event in events:
@@ -32,15 +44,7 @@ class Desktop:
                 self.window=pygame.display.set_mode(self.windowed,pygame.RESIZABLE)
                 self.layout()
             elif event.type==pygame.KEYDOWN and event.key==pygame.K_F11:
-                previous=self.fullscreen
-                try:
-                    self.fullscreen=not previous
-                    self.window=pygame.display.set_mode((0,0) if self.fullscreen else self.windowed,
-                                                       pygame.FULLSCREEN if self.fullscreen else pygame.RESIZABLE)
-                except pygame.error:
-                    self.fullscreen=False
-                    self.window=pygame.display.set_mode(self.windowed,pygame.RESIZABLE)
-                self.layout()
+                self.toggle_fullscreen()
             elif hasattr(event,'pos'):
                 data=event.dict.copy();data['pos']=self.point(event.pos)
                 result.append(pygame.event.Event(event.type,data))

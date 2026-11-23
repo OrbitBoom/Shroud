@@ -32,17 +32,20 @@ python main.py
 
 Run the game from the cloned source tree so the map data and artwork are available.
 
+Start with **Tutorial** for a short practice session. Walk, slash, throw, then open one chest. Each step appears when you finish the previous one. Esc leaves practice. Training uses silent sentries and contributes no profile observations.
+
+The desktop soundtrack is an original, looping plucked melody. Slashes, throws, dashes, hits, and scroll choices have short sound cues. Controls → Sound toggles music and effects for the session.
+
 Normal launch opens a title screen. Choose **Play**, then **Gentle**, **Balanced**
 or **Demanding**. New journeys begin in First Lantern, where chests introduce
 upgrades. Balanced preserves the original combat pace. Gentle gives 40% longer
 enemy warnings, 25% longer firing cooldowns and 25% slower shots. Demanding uses
 20% shorter warnings, 15% shorter cooldowns and 15% faster shots. Player damage,
-health, movement and all power-up rules stay the same. The chosen pace lasts
+health and movement are shared. Gentle uses an ordinary dash and offers one sword upgrade. Balanced uses E for nearby chests and otherwise for a stored burst. Demanding uses E for chests and Q for bursts. The chosen pace lasts
 through the run and retries and is included in event context; it never adapts
 silently. Choose New journey from pause to choose another pace.
 
-The resizable desktop window letterboxes the original play area. F11 switches
-fullscreen; pointer coordinates follow the viewport. Interface text is rendered
+The resizable desktop window letterboxes the original play area. F11 or Controls → Toggle fullscreen switches display mode, and pointer coordinates follow the viewport. Interface text is rendered
 at window resolution. The supported resize minimum is 960×600; 1280×800 is
 recommended for reading. Native Retina/fullscreen behaviour can vary with SDL
 and the operating system.
@@ -88,9 +91,21 @@ Space held for 0.18 seconds starts sprinting; a shorter press dashes on release.
 Sprinting blocks attacks. Slashing toward an incoming bolt during the opening
 attack window can reflect it. Dashes deal damage but do not grant invulnerability.
 
+## Finding your way
+
+The upper-right minimap shows the whole layout with north at the top. The cream
+diamond follows the ninja, coral dots show living enemies, and a green outline
+marks the exit. In marsh mist, enemy dots appear inside the clear radius.
+Press Tab for a larger view. A gold ring identifies each enemy holding a seal.
+
+At The Pilgrim Fork, Lantern Causeway, and Chimney Switchbacks, two wooden boards with compass bearings on a
+single post describe the routes before they split. Try
+`python main.py --level temple_01 --biome grounds` to see the guarded shortcut
+and the longer gallery from the start.
+
 ## Shadow Echo and progression
 
-A dash leaves one stationary Echo. Your next accepted slash or throw queues its
+On Balanced and Demanding, a dash leaves one stationary Echo. Your next accepted slash or throw queues its
 repeat after **0.35 seconds**, preserving the attack direction and slash charge.
 An unused Echo expires after **3 seconds**; another dash replaces it.
 
@@ -105,13 +120,13 @@ is lost when the game closes.
 
 ## Scroll caches and power-ups
 
-Try the five authored caches in **First Lantern**:
+First Lantern offers one chest on Gentle, two on Balanced, and five on Demanding.
 
 ```sh
 python main.py --level training_01 --biome grounds --seed 7
 ```
 
-Three technique caches and two burst caches reward the starting area, garden
+On Demanding, three technique caches and two burst caches reward the starting area, garden
 detour and cleared courtyard. Encounter caches unlock when the lesson seal opens.
 Other layouts do not have caches yet. The usual random starting-layout behavior
 is unchanged; choose First Lantern with the command above or F2 to try them.
@@ -133,13 +148,11 @@ If fewer than two techniques remain eligible, the cache stays unclaimed.
 | Parry | Opening window +0.05 / +0.08 / +0.10 seconds; geometry unchanged |
 
 Repeat picks increase rank; capped techniques leave future offer pools. Bonuses
-are relative to base values. Slash damage retains integer rounding; cards show
-the actual quick-slash damage and other current-to-upgraded values. Charged
-slashes and Echo use the upgraded damage/reach. Owned icons show ranks in the
-HUD; hover for a live value, or open Techniques from Escape for the full list.
+are relative to base values. Slash damage rounds to whole points. Gentle and Balanced cards describe the effect in one sentence. Demanding cards also show the rank and the values before and after the upgrade. Charged
+slashes and Echo use the upgraded damage/reach. Gentle keeps your chosen sword effect on screen. On the other paces, hover over an owned icon to recall its effect or open Techniques from the pause menu for the numbers.
 Techniques survive level transitions and clear on death, restart or run end.
 
-A burst occupies one stored slot. **Q** consumes it for **10 simulation seconds**:
+A burst occupies one stored slot. On Balanced, press **E** away from an available chest to use it. On Demanding, press **Q**. Each lasts **10 simulation seconds**.
 **Smoke Veil** cancels enemy windups and blocks new targeting/shots; existing
 projectiles still hurt. **Haste** multiplies normal walking speed by 1.5, including
 walking while aiming/attacking; sprint and dash retain their original speeds.
@@ -169,7 +182,46 @@ Each run retains up to 4,096 detached in-memory event records: available choices
 confirmed picks, actual attacks/burst use, hits, parries and damage, with context.
 Records span level transitions and remain after completion/death until a new
 run or retry. Older records are discarded when full; `history.dropped` counts
-them. No profiling labels, scoring algorithm, database or telemetry is present.
+them. To retain journeys across launches, enable local recording.
+
+## Your playstyle in five minutes
+
+- Finish the last level to see **Your playstyle so far**. The three rows summarize the journeys in your current profile. A normal desktop launch keeps this session in memory. Closing the game clears it. Launch with `python main.py --profile` to keep building the same local profile across launches. Tutorial practice contributes no observations.
+- **Risk taking.** At the Pilgrim Fork, the sign offers a short causeway with two archers and a longer gallery with cover. Entering the guarded causeway gives +1. Taking the gallery gives −1. The rule checks that the choice was offered and both guards were alive. Skipping the fork supplies no vote.
+- **Adaptability.** Suppose you slash, take damage, switch to a throw and land it in the same area within the recovery window. That counts as revising your tactic. With Flow active, alternating attacks earns a damage bonus, so the rule leaves your intent undecided.
+- **Fortitude.** Two signals share the score. Persistence can be observed when you retry after a death and clear the setback area or finish the level. Restraint can be observed when you have an attack available at low health, wait through an enemy warning, then attack just after the shot. Dying or missing a shot alone gives neither signal a negative vote.
+- **How a number moves.** The game saves events, matches a rule, and links its vote to the events that explain it. Votes are averaged within a situation, then within a journey. Four neutral starting votes dampen early swings. One guarded shortcut moves Risk taking from 50 to 60. A sheltered choice on the next journey brings it back to 50.
+- **What coverage means.** One journey in one situation gives about 8% coverage. Four qualifying journeys across three different combinations of layout, biome and pace reach 100% for a signal. Fortitude uses the less-observed of its two signals for coverage. “No observation yet” means the rule has seen no qualifying example. A score describes play in SHROUD, and coverage describes how much the rules have seen.
+- **What changes today.** You pick the difficulty. The game draws layouts and biomes using its existing random rules. Gates respond to cleared encounters. Profile scores currently have no say in layouts, enemies, chest offers or difficulty.
+
+## Work for later
+
+- [ ] Add a password-free local player picker with **New player** and **Continue as**. Give each player a stable ID so two people can share a device and keep separate histories.
+- [ ] Let a returning player attach their existing anonymous saved profile to their new account. Test switching, renaming and reopening accounts without mixing records.
+- [ ] Playtest the rules. Ask people why they chose a route or changed attacks, then compare their answers with the recorded reasons.
+- [ ] Next week, try one optional change driven by the profile, such as offering a guarded shortcut. Decide how much evidence it needs and keep a neutral route available.
+- [ ] Record what the adaptive system offered before scoring the response. Compare ordinary and adaptive runs to check whether the offer itself steered the choice.
+- [ ] Revisit the end screen after playtesting. Decide which scores and examples players actually find useful.
+
+## Optional saved playstyle profile
+
+Run `python main.py --profile` to keep an offline journal in `~/.shroud/profile.sqlite3`.
+A normal desktop launch keeps a temporary profile in memory. One file represents one player. To choose another
+file, add `--profile-db PATH` when playing and `--db PATH` before the inspection command.
+The journal includes gameplay decisions, their alternatives, actions, outcomes, and
+the event IDs behind each rule-based score. The three scores describe patterns seen
+in play. Coverage grows across journeys and situations. Level selection stays as authored.
+
+With the game closed, use:
+
+```sh
+python -m shroud.profile_store show
+python -m shroud.profile_store export ~/shroud-profile.json
+python -m shroud.profile_store delete
+```
+
+Export requires a new filename. Delete clears all sessions, journeys, events, and scores
+in the selected database. Existing exports remain separate files.
 
 ## Run options
 
@@ -219,7 +271,7 @@ shown world direction; it never pushes the player.
 - Biome rules, planned enemy counterplay and 180 future encounter drafts are described in
   [design/biomes.json](design/biomes.json), [design/enemies.json](design/enemies.json)
   and [design/encounters.json](design/encounters.json).
-- Player profiling, behavioral scoring and saved progression are not implemented.
+- Optional local profiling records journeys across launches. Starting the game begins a fresh journey.
 - All eight techniques and four bursts are implemented, with contextual event
   history. Authored caches remain in First Lantern; other maps await placement.
 

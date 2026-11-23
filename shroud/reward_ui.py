@@ -2,7 +2,7 @@ from shroud import interface as UI
 """Power-up presentation and shared hitboxes. Drawing never advances game state."""
 import pygame
 from shroud.assets import ROOT
-from shroud.rewards import REWARDS, RANKS, nearby_cache
+from shroud.rewards import REWARDS, RANKS, TECHNIQUE_HELP, nearby_cache
 
 INK = UI.INK
 PAPER = (238, 229, 210)
@@ -99,8 +99,13 @@ class RewardUI:
         rewards = world.rewards
         # Fixed rows leave the existing objective and controls in their own space.
         pygame.draw.rect(screen, INK, (0, 688, 1280, 49))
+        if world.practice:
+            return
+        if world.difficulty == "gentle":
+            for key in rewards.ranks:
+                self.text(screen, REWARDS[key].name + "   ·   " + TECHNIQUE_HELP[key], (32, 697))
+            return
         x, hover = 32, ""
-        values = rewards.effective()
         for key, definition in REWARDS.items():
             if definition.category != "technique":
                 continue
@@ -110,7 +115,7 @@ class RewardUI:
             screen.blit(self.small_icons[key], (x, 691))
             self.text(screen, RANKS[rank], (x + 28, 697), PAPER, self.small)
             if pygame.Rect(x, 691, 60, 24).collidepoint(getattr(self,"pointer",pygame.mouse.get_pos())):
-                hover = f"{definition.name} {RANKS[rank]} / {STAT_LABELS[definition.stat]}: {value_text(key, getattr(values, definition.stat))}"
+                hover = f"{definition.name}   ·   {TECHNIQUE_HELP[key]}"
             x += 66
         self.text(screen, "P Details", (560, 697), MUTED, self.small)
         if rewards.active:
@@ -119,7 +124,8 @@ class RewardUI:
             state = f"EXPIRED  {REWARDS[rewards.expired].name}"
         else:
             state = "STORED" if rewards.stored else "BURST"
-        stored = f"Q  {REWARDS[rewards.stored].name}" if rewards.stored else "No burst stored"
+        key = {"gentle": "Auto", "balanced": "E", "demanding": "Q"}[world.difficulty]
+        stored = f"{key}  {REWARDS[rewards.stored].name}" if rewards.stored else "No burst stored"
         if rewards.active and rewards.stored:
             stored += " (waiting)"
         icon_key = rewards.active or rewards.stored
@@ -146,7 +152,7 @@ class RewardUI:
         screen.blit(shade, (0, 0))
         rewards = world.rewards
         self.text(screen, "Choose a scroll", (640, 142), font=self.title, center=True)
-        self.text(screen, "A new edge for the path ahead.", (640, 184), MUTED, center=True)
+        self.text(screen, "Choose one for this journey.", (640, 184), MUTED, center=True)
         for index, (key, rect) in enumerate(zip(choice.cache.offers, card_rects())):
             definition = REWARDS[key]
             screen.blit(self.images["ui_scroll_card_background"], rect)
@@ -162,22 +168,28 @@ class RewardUI:
             if definition.category == "technique":
                 rank = rewards.ranks.get(key, 0)
                 current, upgraded = rewards.preview(key)
+                if world.difficulty != "demanding":
+                    self.wrapped(screen, TECHNIQUE_HELP[key], pygame.Rect(rect.x+36, rect.y+190, 264, 80))
+                    if choice.selected == index:
+                        self.text(screen, "Selected", (rect.centerx, rect.y+309), INK, self.small, True)
+                    continue
                 lines = [f"Rank {RANKS[rank]}  ->  {RANKS[min(3, rank + 1)]}",
                          f"{STAT_LABELS[definition.stat]} {bonus_text(key, min(3, rank + 1))} total",
                          f"{value_text(key, current)}  ->  {value_text(key, upgraded)}",
-                         "Lasts this run"]
+                         TECHNIQUE_HELP[key]]
                 if key == "sharpening":
                     lines[2] = "Quick slash: " + lines[2]
+                self.wrapped(screen, lines.pop(), pygame.Rect(rect.x+30, rect.y+258, 276, 65))
                 for offset, line in enumerate(lines):
                     self.text(screen, line, (rect.centerx, rect.y + 185 + offset * 30), INK, self.small, True)
             else:
                 self.text(screen, "One charge  /  10 seconds", (rect.centerx, rect.y + 185), INK, self.small, True)
                 self.wrapped(screen, definition.description, pygame.Rect(rect.x + 34, rect.y + 212, 268, 90))
-                self.text(screen, "Store now; activate with Q", (rect.centerx, rect.y + 309), INK, self.small, True)
+                self.text(screen, {"gentle":"Activates when an enemy aims", "balanced":"Store now · E to activate", "demanding":"Store now · Q to activate"}[world.difficulty], (rect.centerx, rect.y + 309), INK, self.small, True)
             if definition.category == "technique":
                 label = "Selected" if choice.selected == index else ""
                 self.text(screen, label, (rect.centerx, rect.y + 309), INK, self.small, True)
-        message = choice.message or "← →  Choose     Enter  Take scroll"
+        message = choice.message or ("Click a scroll or press 1 or 2." if choice.selected is None else "Press Enter or click Take scroll.")
         if choice.replacing:
             UI.clear_text(screen)
             selected = REWARDS[choice.cache.offers[choice.selected]].name
@@ -196,6 +208,10 @@ class RewardUI:
     def details(self, screen, world):
         rewards = world.rewards
         values = rewards.effective()
+        if world.difficulty == "gentle":
+            line = next((TECHNIQUE_HELP[key] for key in rewards.ranks), "Open a chest to choose a sword upgrade.")
+            self.text(screen, line, (640, 475), PAPER, center=True)
+            return
         self.text(screen, "Techniques", (640, 435), MINT, center=True)
         for index, (key, definition) in enumerate((item for item in REWARDS.items() if item[1].category == "technique")):
             rank = rewards.ranks.get(key, 0)

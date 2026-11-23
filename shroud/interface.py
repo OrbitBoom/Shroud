@@ -30,9 +30,9 @@ def button(surface, label, rect, focused=False):
     text(surface, label, rect.center, center=True)
 
 DIFFICULTIES = {
-    'gentle': ('Gentle', 'More time to read attacks and find your rhythm.', 1.4, 1.25, .75),
-    'balanced': ('Balanced', 'The original pace. Read, react, commit.', 1., 1., 1.),
-    'demanding': ('Demanding', 'Quicker attacks and less breathing room.', .8, .85, 1.15),
+    'gentle': ('Gentle', 'Slower enemies. A simple dash and one sword upgrade.', 1.4, 1.25, .75),
+    'balanced': ('Balanced', 'Standard pace. E handles chests and stored bursts.', 1., 1., 1.),
+    'demanding': ('Demanding', 'Faster enemies. Time your stored burst with Q.', .8, .85, 1.15),
 }
 
 class Menu:
@@ -41,6 +41,8 @@ class Menu:
         self.focus = 0
         self.back = 'title'
         self.difficulty = 'balanced'
+        self.profile_stats = None
+        self.sound_enabled = False
         self.reduced_motion = False
         self.pointer = (-1,-1)
         self.highlight = {}
@@ -48,10 +50,10 @@ class Menu:
 
     def options(self):
         return {
-            'title': ['Play', 'Controls', 'Quit'],
+            'title': ['Play', 'Tutorial', 'Controls', 'Quit'], 'trained': ['Play', 'Back'],
             'difficulty': ['Gentle', 'Balanced', 'Demanding', 'Back'],
             'pause': ['Resume', 'Techniques', 'Controls', 'Restart level', 'New journey', 'Quit'],
-            'controls': ['Reduce motion: '+('On' if self.reduced_motion else 'Off'), 'Back'], 'techniques': ['Back'],
+            'controls': ['Sound '+('on' if self.sound_enabled else 'off'), 'Toggle fullscreen', 'Reduce motion: '+('On' if self.reduced_motion else 'Off'), 'Back'], 'techniques': ['Back'],
             'complete': ['Continue', 'New journey', 'Quit'],
             'finished': ['New journey', 'Quit'], 'retry': ['Retry', 'New journey', 'Quit'],
             'restart': ['Restart level', 'Cancel'], 'quit': ['Quit game', 'Cancel'],
@@ -59,7 +61,11 @@ class Menu:
 
     def rects(self):
         options = self.options()
-        y = 600 if self.page == 'controls' else 620 if self.page == 'techniques' else 310
+        if self.page == "controls":
+            return [pygame.Rect(440, 534+i*51, 400, 44) for i in range(len(options))]
+        if self.page == "finished":
+            return [pygame.Rect(440, 545+i*64, 400, 52) for i in range(len(options))]
+        y = 620 if self.page == 'techniques' else 310
         return [pygame.Rect(440, y+i*64, 400, 52) for i in range(len(options))]
 
     def handle(self, events):
@@ -81,35 +87,54 @@ class Menu:
         surface.fill(INK)
         pygame.draw.line(surface, RED, (600, 112), (680, 112), 3)
         titles={'title':'Shroud', 'difficulty':'Choose your pace', 'pause':'Paused',
-                'controls':'Controls', 'techniques':'Your techniques',
+                'trained':'Training complete', 'controls':'Controls', 'techniques':'Your techniques',
                 'restart':'Begin this level again?', 'quit':'Leave the shadows?',
                 'complete':'Path cleared', 'finished':'Journey complete', 'retry':'Back to the shadows'}
         text(surface,titles[self.page],(640,175),48,serif=True,center=True)
-        subtitle={'title':'A ninja’s journey', 'difficulty':'You can choose again when starting a new run.',
+        subtitle={'trained':'Choose Play when you’re ready for your first journey.', 'title':'A ninja’s journey', 'difficulty':'You can choose again when starting a new run.',
                   'pause':DIFFICULTIES[self.difficulty][0], 'restart':'Your upgrades and progress in this level will reset.',
                   'quit':'This run is not saved.'}.get(self.page,'')
         text(surface,subtitle,(640,244),22,MUTED,center=True)
+        if self.page == "finished":
+            text(surface, "Your playstyle so far", (640, 250), 30, serif=True, center=True)
+            if self.profile_stats is None:
+                text(surface, "Profile unavailable for this journey.", (640, 350), 22, MUTED, center=True)
+            else:
+                for i, (key, label) in enumerate((("fortitude", "Fortitude"), ("adaptability", "Adaptability"),
+                                                  ("risk_appetite", "Risk taking"))):
+                    item = self.profile_stats[key]
+                    observed = any(signal["runs"] for signal in item["signals"].values())
+                    value = (f"{item['score']:g}/100   ·   {item['confidence']:.0%} coverage"
+                             if observed else "No observation yet")
+                    text(surface, label, (355, 300 + 55*i), 24)
+                    text(surface, value, (624, 300 + 55*i), 22, MUTED)
+                text(surface, "Coverage grows across journeys and different situations.", (640, 483), 20, MUTED, center=True)
         if self.page == 'title' and portrait is not None:
-            surface.blit(portrait, portrait.get_rect(center=(640,590)))
+            surface.blit(portrait, portrait.get_rect(center=(640,635)))
         if self.page=='controls':
             lines=['WASD  Move    ·    Mouse  Aim', 'Left click  Slash    ·    Hold to charge',
                    'Right click  Throw    ·    Hold to steady your aim', 'Space  Tap to dash, hold to run',
                    'E  Open a nearby chest    ·    Q  Use your stored burst',
                    'Esc  Pause    ·    F11  Fullscreen', 'Optional: J / K quick attacks · Tab map · F2 level selection']
-            for i,line in enumerate(lines): text(surface,line,(640,310+i*39),22,center=True)
+            if self.difficulty == 'gentle':
+                lines = ['WASD  Move    ·    Mouse  Aim', 'Left click  Slash    ·    Right click  Throw',
+                         'Space  Dash    ·    E  Open chest', 'Esc  Pause    ·    Tab  Map']
+            elif self.difficulty == 'balanced':
+                lines[4] = 'E  Open chest or activate stored burst'
+            for i,line in enumerate(lines): text(surface,line,(640,285+i*36),22,center=True)
         if self.page=='difficulty':
             key=list(DIFFICULTIES)[min(self.focus,2)]
             text(surface,DIFFICULTIES[key][1],(640,602),22,MUTED,center=True)
         if self.page=='techniques':
-            from shroud.rewards import REWARDS,RANKS
+            from shroud.rewards import REWARDS,RANKS,TECHNIQUE_HELP
             from shroud.reward_ui import value_text, STAT_LABELS
             values=world.rewards.effective()
-            for i,(key,r) in enumerate((k,v) for k,v in REWARDS.items() if v.category=='technique'):
+            for i,(key,r) in enumerate((k,v) for k,v in REWARDS.items() if v.category=='technique' and (world.difficulty != 'gentle' or k in ('reach','sharpening'))):
                 x,y=170+(i//4)*520,290+(i%4)*75
                 if reward_ui:
                     surface.blit(reward_ui.small_icons[key], (x-34,y+5))
-                text(surface,r.name+' '+RANKS[world.rewards.ranks.get(key,0)],(x,y),26)
-                text(surface,STAT_LABELS[r.stat]+': '+value_text(key,getattr(values,r.stat)),(x,y+32),20,MUTED)
+                text(surface,r.name if world.difficulty == 'gentle' else r.name+' '+RANKS[world.rewards.ranks.get(key,0)],(x,y),26)
+                text(surface,TECHNIQUE_HELP[key] if world.difficulty == "gentle" else STAT_LABELS[r.stat]+': '+value_text(key,getattr(values,r.stat)),(x,y+32),20,MUTED)
         now = pygame.time.get_ticks()
         blend = min(1., (now-self.last_draw)/100)
         self.last_draw = now

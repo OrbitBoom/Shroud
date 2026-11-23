@@ -71,6 +71,16 @@
             13,
             3
           ]
+        ],
+        "signpost": [
+          [
+            "north",
+            "Long gallery · more cover"
+          ],
+          [
+            "east",
+            "Short causeway · two archers"
+          ]
         ]
       },
       "base_families": [
@@ -223,6 +233,16 @@
             3,
             5
           ]
+        ],
+        "signpost": [
+          [
+            "north",
+            "Narrow ridge"
+          ],
+          [
+            "east",
+            "Wide switchback · archers"
+          ]
         ]
       },
       "base_families": [
@@ -298,6 +318,16 @@
             15,
             8,
             3
+          ]
+        ],
+        "signpost": [
+          [
+            "north",
+            "Long island trail · cover"
+          ],
+          [
+            "east",
+            "Short boardwalk · open ground"
           ]
         ]
       },

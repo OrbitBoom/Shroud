@@ -11,6 +11,7 @@ from shroud.level import Camera, Prop
 from shroud.assets import CATALOG, BIOME_NAMES, asset_path
 from shroud.campaign import LEVEL_IDS, BIOME_IDS, SELECTOR_ROWS, load_level
 from shroud.reward_ui import RewardUI
+from shroud import navigation as nav
 
 INK = UI.INK
 
@@ -64,6 +65,19 @@ class Renderer:
         self.outer_floor.fill((*palette["tint"], 255), special_flags=pygame.BLEND_RGBA_MULT)
         self.accent = palette["accent"]
         self.required_groups = {name for name, _ in world.room.gates}
+        self.minimap = self.overview = None
+        self.signposts = []
+        if world.room.data:
+            self.minimap = nav.RoomMap(world.room, pygame.Rect(982, 9, 178, 116), compact=True)
+            self.overview = nav.RoomMap(world.room, pygame.Rect(120, 132, 1040, 570), compact=False)
+            for text, x, y in world.room.data["signs"]:
+                name, arrow = text.rsplit(" ", 1)
+                direction = {"^": "north", "v": "south", "<": "west", ">": "east"}[arrow]
+                self.signposts.append((Vector2(x, y) * S.TILE_SIZE, nav.sign_art([(direction, name.title())])))
+            for fork in world.room.data.get("choices", []):
+                if "signpost" in fork:
+                    anchor = Vector2(fork["start"]) * S.TILE_SIZE
+                    self.signposts.append((anchor, nav.sign_art(fork["signpost"])))
         self.trails = []
         self.trail_timer = 0.0
         self.rng = random.Random(6)
@@ -133,10 +147,6 @@ class Renderer:
             if visible.colliderect(prop.rect):
                 self._prop(prop, world)
         if world.room.data:
-            for text, x, y in world.room.data["signs"]:
-                position = Vector2(x, y) * tile
-                if visible.collidepoint(position):
-                    self.text(self.scene, text, self.point(position), PAPER, self.small)
             self._markers(world)
 
     def _markers(self, world):
@@ -196,6 +206,9 @@ class Renderer:
         for screen_cover in world.room.bamboo:
             if visible.colliderect(screen_cover.prop.rect):
                 objects.append((screen_cover.position.y + 12, "bamboo", screen_cover))
+        for anchor, image in self.signposts:
+            if visible.collidepoint(anchor) and world.room.rules.visible_enemy(world.player.position, anchor):
+                objects.append((anchor.y, "signpost", (anchor, image)))
         for enemy in world.enemies:
             if visible.collidepoint(enemy.position):
                 objects.append((enemy.position.y + 24, "enemy", enemy))
@@ -205,6 +218,9 @@ class Renderer:
         for _, kind, entity in sorted(objects, key=lambda item: item[0]):
             if kind == "prop":
                 self._prop(entity, world)
+            elif kind == "signpost":
+                anchor, image = entity
+                self.scene.blit(image, image.get_rect(midbottom=self.point(anchor)))
             elif kind == "bamboo":
                 self._bamboo(entity, world)
             elif kind == "cache":
@@ -480,25 +496,30 @@ class Renderer:
         pygame.draw.rect(screen, INK, (0, 737, S.WIDTH, 63))
         pygame.draw.rect(screen, RED, (48, 30, 6, 37), border_radius=2)
         self.text(screen, "Shroud", (69, 26), PAPER, self.title)
+        if world.practice:
+            self.text(screen, "Training courtyard", (71, 78), MINT, self.small)
+            self.text(screen, world.practice_hint, (48, 132), PAPER)
+            self.text(screen, "Esc   Leave tutorial", (48, 758), MUTED, self.small)
+            return
         data = world.room.data
         label = data["name"] if data else "Training grounds"
         self.text(screen, label, (71, 72), self.accent, self.small)
         if data:
             status = f"LEVEL {getattr(world, 'run_position', 1)}/{getattr(world, 'run_length', 1)} / {BIOME_NAMES[world.room.biome]}"
             self.text(screen, status, (71, 94), MUTED, self.small)
-        self.text(screen, "Health", (375, 32), MUTED, self.small)
+        self.text(screen, "Health", (331, 32), MUTED, self.small)
         for i in range(S.PLAYER_HEALTH):
-            pygame.draw.rect(screen, RED if i < world.player.health else (57, 72, 66), (376 + i * 23, 57, 17, 8), border_radius=3)
-        for x, name, key, duration in ((575, "dash", "Space", world.rewards.effective().dash_cooldown),
-                                      (782, "slash", "Left click", world.rewards.effective().slash_timing.cooldown),
-                                      (1000, "throw", "Right click", world.rewards.effective().throw_cooldown)):
+            pygame.draw.rect(screen, RED if i < world.player.health else (57, 72, 66), (332 + i * 21, 57, 17, 8), border_radius=3)
+        for x, name, key, duration in ((485, "dash", "Space", world.rewards.effective().dash_cooldown),
+                                      (650, "slash", "Left click", world.rewards.effective().slash_timing.cooldown),
+                                      (815, "throw", "Right click", world.rewards.effective().throw_cooldown)):
             cooldown = world.player.cooldowns[name]
             if cooldown > 0:
                 duration = world.player.cooldown_totals[name]
             self.text(screen, {"dash": "Dash", "slash": "Slash", "throw": "Throw"}[name], (x, 32), PAPER, self.small)
             self.text(screen, key, (x, 55), MUTED, self.small)
-            pygame.draw.rect(screen, (51, 70, 63), (x, 80, 170, 3), border_radius=1)
-            pygame.draw.rect(screen, MINT if cooldown <= 0 else RED, (x, 80, 170 * max(0, 1 - cooldown / duration), 3), border_radius=1)
+            pygame.draw.rect(screen, (51, 70, 63), (x, 80, 126, 3), border_radius=1)
+            pygame.draw.rect(screen, MINT if cooldown <= 0 else RED, (x, 80, 126 * max(0, 1 - cooldown / duration), 3), border_radius=1)
         hint = "Bamboo walls: slash a path or go around. Three shots break a cluster." if world.room.bamboo and not world.room.gates_cleared else self._objective(world)
         if world.room.biome == "snow" and not world.room.gates_cleared:
             hint = "Ice: release movement early to brake; sprinting needs more stopping room."
@@ -513,6 +534,15 @@ class Renderer:
                     "gust": f"WIND {bearing} / {remaining:.1f}s / all shots drift; close in or wait"}[phase]
             if world.room.gates_cleared:
                 hint += " / Seals open: reach the exit."
+        if self.minimap:
+            panel = pygame.Rect(973, 5, 287, 124)
+            pygame.draw.rect(screen, nav.BORDER, panel, 1, border_radius=5)
+            self.minimap.draw(screen, world)
+            nav.player_marker(screen, (1178, 31), 6)
+            pygame.draw.circle(screen, nav.ENEMY, (1178, 55), 4)
+            pygame.draw.rect(screen, nav.EXIT, (1173, 75, 10, 10), 2)
+            for y, label in ((18, "You"), (42, "Enemy"), (67, "Exit"), (95, "Tab  Map")):
+                UI.text(screen, label, (1168 if y == 95 else 1191, y), 19, PAPER)
         self.text(screen, hint, (48, 132), PAPER, self.small)
         self.text(screen, "WASD  Move    ·    Space  Dash / run", (48, 758), PAPER, self.small)
         self.text(screen, "", (306, 758), MUTED, self.small)
@@ -520,6 +550,8 @@ class Renderer:
 
     def _objective(self, world):
         area, objective = world.room.area_at(world.player.position)
+        if world.difficulty == "gentle" and area == "Echo lesson":
+            objective = "Clear the two marked targets to open the exit."
         if world.room.gates_cleared:
             objective = "All seals open — reach the mint exit. TAB shows the route."
         elif area == "Combat courtyard" and "courtyard" in world.room.open_gates:
@@ -573,32 +605,15 @@ class Renderer:
         self.text(screen, line, (54, y), GOLD)
 
     def draw_map(self, screen, world):
-        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        shade.fill((12, 22, 23, 242))
-        screen.blit(shade, (0, 0))
-        room = world.room
-        scale = min(1040 / room.bounds.width, 570 / room.bounds.height)
-        origin = Vector2((S.WIDTH - room.bounds.width * scale) / 2, 125)
-        def point(position):
-            return origin + Vector2(position) * scale
-        self.text(screen, room.data["name"].upper(), (48, 30), PAPER, self.title)
-        self.text(screen, "TAB / ESC return    Mint: you & exit    Gold: seal targets    Blue: retry refuges", (48, 86), MUTED)
-        for x, y in room.tiles:
-            pygame.draw.rect(screen, (80, 102, 96), (*point((x * S.TILE_SIZE, y * S.TILE_SIZE)), S.TILE_SIZE * scale + 1, S.TILE_SIZE * scale + 1))
-        for wall in room.walls:
-            pygame.draw.rect(screen, (30, 42, 43), (*point(wall.topleft), max(1, wall.width * scale), max(1, wall.height * scale)))
-        for cover in room.bamboo:
-            if not cover.broken:
-                pygame.draw.rect(screen, (177, 223, 127), (*point(cover.footprint.topleft), max(2, cover.footprint.width * scale), max(2, cover.footprint.height * scale)))
-        for enemy in world.enemies:
-            if enemy.alive and room.rules.visible_enemy(world.player.position, enemy.position):
-                required = any(enemy.group == name for name, _ in room.gates)
-                pygame.draw.circle(screen, GOLD if required else MUTED, point(enemy.position), 3)
-        for checkpoint in room.data.get("checkpoints", []):
-            pygame.draw.circle(screen, (145, 193, 235), point(Vector2(checkpoint["spawn"]) * S.TILE_SIZE), 5, 1)
-        pygame.draw.rect(screen, MINT, (*point(room.exit_rect.topleft), room.exit_rect.width * scale, room.exit_rect.height * scale), 2)
-        pygame.draw.circle(screen, MINT, point(world.player.position), 6)
-        self.text(screen, "All seal targets must fall. Optional sentries can remain. Refuges activate only after their stage clears.", (48, 735), PAPER)
+        if self.overview is None:
+            return
+        UI.clear_text(screen)
+        screen.fill(INK)
+        self.text(screen, world.room.data["name"], (48, 30), PAPER, self.title)
+        self.text(screen, "Tab / Esc  Return     Diamond  You     Coral  Enemy     Gold ring  Seal target     Green  Exit     Blue  Refuge",
+                  (48, 86), MUTED)
+        self.overview.draw(screen, world)
+        self.text(screen, "Clear the seal targets to open the exit. Other sentries are optional.", (48, 735), PAPER)
 
 
 def draw_debug(surface: pygame.Surface, world, font: pygame.font.Font, fps: float, camera) -> None:

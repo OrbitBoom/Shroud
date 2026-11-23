@@ -97,23 +97,46 @@ class Impact:
     remaining: float = 0.32
 
 
+PRACTICE_HINTS = (
+    "Walk a few steps with W, A, S or D.",
+    "Aim with the mouse. Click and release the left button to slash.",
+    "Click and release the right mouse button to throw a shuriken.",
+    "Press E by the chest. Pick the scroll you like and confirm.",
+)
+
+
 class Sandbox:
-    def __init__(self, events: EventBus | None = None, room=None, rewards=None, history=None, progress=(1, 1), difficulty="balanced") -> None:
+    def __init__(self, events: EventBus | None = None, room=None, rewards=None, history=None, progress=(1, 1), difficulty="balanced", practice=False) -> None:
         self.events = events if events is not None else EventBus()
         self.room = room if room is not None else Room()
         self.time = 0.0
         self.rewards = rewards if rewards is not None else RunRewards()
         self.history = history if history is not None else RunHistory()
         self.run_position, self.run_length = progress
+        self.practice = practice
         self.difficulty = difficulty
         self.history.attach(self)
         self.reset(clear_rewards=False)
 
-    def reset(self, clear_rewards=True) -> None:
+    def reset(self, clear_rewards=True, reason="restart") -> None:
         if clear_rewards:
             self.rewards.reset()
-            self.history.clear()
+            self.sample_area(force=True)
+            self.history.clear(reason)
+        self.lesson = 0
         self.caches = load_caches(self.room.data)
+        if self.room.data and self.room.data["id"] == "training_01":
+            if self.difficulty == "gentle":
+                self.caches = [c for c in self.caches if c.key == "first-technique"]
+                for cache in self.caches:
+                    cache.pool = ("reach", "sharpening")
+            elif self.difficulty == "balanced":
+                self.caches = [c for c in self.caches if c.key in ("first-technique", "lesson-burst")]
+                for cache in self.caches:
+                    if cache.category == "burst":
+                        cache.pool = ("haste", "smoke_veil")
+        if self.practice:
+            self.caches = []
         self.checkpoint = None
         for screen in self.room.bamboo:
             screen.broken = False
@@ -126,7 +149,7 @@ class Sandbox:
             for i, (group, sprite, x, y, shoots) in enumerate(self.room.data["enemies"]):
                 self.enemies.append(Enemy(
                     i + 1, Vector2(x, y) * S.TILE_SIZE, 1.2 + (i % 3) * .4,
-                    shooting=shoots, respawn=False, group=group, sprite=sprite,
+                    shooting=shoots and not self.practice, respawn=False, group=group, sprite=sprite,
                     activation_range=S.ENEMY_ACTIVATION_RANGE,
                 ))
         else:
@@ -142,12 +165,67 @@ class Sandbox:
         self.projectiles: list[Projectile] = []
         self.impacts: list[Impact] = []
         self.shake = 0.0
-        self.events.emit("room_entered", timestamp=self.time, room="training", position=tuple(self.player.position))
+        self.sample_time = self.history.elapsed
+        self.sample_area_name = self.room.area_at(self.player.position)[0]
+        self.route_state = "unseen"
+        self.wind_phase = None
+        self.events.emit("room_entered", timestamp=self.time, room=self.room.data["id"] if self.room.data else "arena", position=tuple(self.player.position))
+
+    @property
+    def practice_hint(self):
+        return PRACTICE_HINTS[self.lesson]
+
+    def observe(self, name, **details):
+        if self.history.recording:
+            self.events.emit(name, **details)
+
+    def sample_area(self, force=False):
+        if not self.history.recording or self.history.status != "playing":
+            return
+        area = self.room.area_at(self.player.position)[0]
+        interval = self.history.elapsed - self.sample_time
+        if interval > 0 and (force or interval >= 2 or area != self.sample_area_name):
+            self.observe("area_sample", area=self.sample_area_name, seconds=interval,
+                         position=tuple(self.player.position))
+            self.sample_time = self.history.elapsed
+        self.sample_area_name = area
+
+    def observe_environment(self):
+        self.sample_area()
+        if self.room.rules.wind_acceleration:
+            phase, _ = self.room.rules.wind_phase(self.biome_elapsed)
+            if phase != self.wind_phase:
+                self.observe("wind_changed", phase=phase, position=tuple(self.player.position))
+                self.wind_phase = phase
+        if self.room.data and self.room.data["id"] == "temple_01" and self.route_state != "taken":
+            fork = self.room.data["choices"][0]
+            if self.route_state == "unseen" and self.sample_area_name == "Pilgrim entry":
+                board = fork.get("signpost")
+                anchor = Vector2(fork["start"]) * S.TILE_SIZE
+                offset = anchor - self.player.position
+                # Only arm the signed fork near the board, before entering either branch.
+                nearby = abs(offset.x) <= 3.5 * S.TILE_SIZE and abs(offset.y) <= 1.5 * S.TILE_SIZE
+                if not board or (nearby and self.room.rules.visible_enemy(self.player.position, anchor)):
+                    self.observe("route_offered", fork=fork["name"], alternatives=["sheltered", "exposed"],
+                                 navigation_version=2 if board else 1, signpost=board,
+                                 position=tuple(self.player.position))
+                    self.route_state = "offered"
+            if self.route_state == "offered":
+                tile = self.player.position / S.TILE_SIZE
+                for branch, rect in zip(("sheltered", "exposed"), fork["branches"]):
+                    if pygame.FRect(rect).collidepoint(tile):
+                        guard_count = sum(enemy.alive and enemy.group == "shortcut" for enemy in self.enemies)
+                        self.observe("route_taken", fork=fork["name"], branch=branch,
+                                     causeway_guards=guard_count, position=tuple(self.player.position))
+                        self.route_state = "taken"
+                        break
 
     def retry_checkpoint(self):
         """Rebuild combat, then restore only the authored cleared stage and refuge spawn."""
         checkpoint = self.checkpoint
-        self.reset()
+        failed = self.history.status == "death"
+        setback_area = self.room.area_at(self.player.position)[0] if failed else None
+        self.reset(reason="retry" if failed else "restart")
         if checkpoint is not None:
             self.checkpoint = checkpoint
             self.player.position = Vector2(checkpoint["spawn"]) * S.TILE_SIZE
@@ -156,6 +234,10 @@ class Sandbox:
                     enemy.health = 0
                     enemy.state = EnemyState.DEAD
             self.room.refresh_gates(self.enemies)
+
+        self.sample_area_name = self.room.area_at(self.player.position)[0]
+        if failed:
+            self.observe("retry_started", checkpoint=checkpoint, setback_area=setback_area, position=tuple(self.player.position))
 
     def update_checkpoint(self):
         if not self.room.data or not self.player.alive:
@@ -167,6 +249,7 @@ class Sandbox:
                     and self.player.position.distance_to(Vector2(checkpoint["spawn"]) * S.TILE_SIZE) < 65):
                 self.checkpoint = checkpoint
                 self.player.health = self.player.max_health
+                self.observe("checkpoint_reached", checkpoint=checkpoint)
 
     def impact(self, position: Vector2, kind: str) -> None:
         self.impacts.append(Impact(position.copy(), kind))
@@ -192,6 +275,9 @@ class Sandbox:
         player_shuriken = sum(
             p.kind == "shuriken" and p.owner == "player" for p in self.projectiles
         )
+        if (self.difficulty == "gentle" and self.player.alive and self.rewards.stored and not self.rewards.active
+                and any(enemy.state == EnemyState.ATTACK for enemy in self.enemies)):
+            self.rewards.activate(self.events, trigger="automatic")
         for command in inputs.commands:
             if command.action == "burst" and self.player.alive:
                 self.rewards.activate(self.events)
@@ -217,7 +303,7 @@ class Sandbox:
                 self.events.emit("flow_transition", action_id=captured.action_id, **self.player.flow_transition)
         if action == "throw":
             self.projectiles.append(self.player.projectile)
-        if action == "dash":
+        if action == "dash" and self.difficulty != "gentle":
             # Capture before movement, and replace even an already queued Echo.
             self.echo = ShadowEcho(self.player.position, self.player.facing, self.rewards.effective().echo_lifetime)
         elif action in ("slash", "throw") and self.echo is not None:
@@ -226,9 +312,22 @@ class Sandbox:
         before = self.player.position.copy()
         displacement = self.player.velocity * dt
         self.player.position = self.room.move(before, displacement, self.player.radius)
+        if self.practice:
+            if self.lesson == 0 and self.player.position.distance_to(self.room.spawn) >= 48:
+                self.lesson = 1
+            elif self.lesson == 1 and action == "slash":
+                self.lesson = 2
+            elif self.lesson == 2 and action == "throw":
+                self.lesson = 3
+                chest = load_caches(self.room.data)[0]
+                chest.position = self.player.position.copy()
+                chest.pool = ("reach", "sharpening")
+                self.caches = [chest]
         for axis in (0, 1):
             if abs(self.player.position[axis] - before[axis] - displacement[axis]) > .001:
                 self.player.velocity[axis] = 0  # No stored ice momentum pushing into a wall.
+        if self.history.recording:
+            self.observe_environment()
         resolve_melee(self, self.player)
         if self.echo is not None:
             resolve_melee(self, self.echo)
@@ -236,9 +335,25 @@ class Sandbox:
             can_attack = self.player.alive and self.rewards.active != "smoke_veil" and self.room.rules.visible_enemy(self.player.position, enemy.position)
             if self.room.data and can_attack:
                 can_attack = not self.room.projectile_blocked(enemy.position, self.player.position, 0)
+            previous_state = enemy.state
             projectile = enemy.tick(dt, self.player.position, can_attack)
+            if self.history.recording and enemy.state == EnemyState.ATTACK and previous_state != enemy.state:
+                reach = self.rewards.effective()
+                distance = self.player.position.distance_to(enemy.position)
+                slash_ready = self.player.cooldowns["slash"] == 0 and distance <= reach.slash_reach + enemy.radius
+                stars = sum(p.kind == "shuriken" and p.owner == "player" for p in self.projectiles)
+                throw_ready = (self.player.cooldowns["throw"] == 0 and stars < S.MAX_SHURIKEN
+                               and distance <= reach.shuriken_range)
+                ready = (self.player.state in (PlayerState.IDLE, PlayerState.MOVING)
+                         and not self.player.sprinting and self.player.held_action is None
+                         and self.player.buffered is None and (slash_ready or throw_ready))
+                self.observe("enemy_warning", enemy=enemy.entity_id, group=enemy.group,
+                             position=tuple(enemy.position), attack_available=ready)
             if projectile:
+                self.observe("enemy_fired", enemy=enemy.entity_id, group=enemy.group)
                 self.projectiles.append(projectile)
+        if self.history.recording:
+            self.before_move = before
         resolve_projectiles(self, dt)
         self.update_checkpoint()
         was_haste = self.rewards.active == "haste"
@@ -247,11 +362,14 @@ class Sandbox:
             limit = S.SPRINT_SPEED if self.player.sprinting else self.rewards.effective().move_speed
             self.player.velocity = self.player.velocity.clamp_magnitude(limit)
         if not self.player.alive:
+            self.sample_area(force=True)
             self.history.finish(self, "death")
             self.echo = None
             self.rewards.reset()
-        elif (self.room.data and self.room.exit_rect.collidepoint(self.player.position)
+        elif (not self.practice and self.room.data and self.room.exit_rect.collidepoint(self.player.position)
               and self.room.gates_cleared):
+            self.sample_area(force=True)
+            self.observe("level_completed")
             self.complete = True
             self.player.cancel_hold()
             self.player.buffered = None
@@ -278,10 +396,14 @@ class Sandbox:
 
 
 class Game:
-    def __init__(self, level_id=None, run_length=S.RUN_LENGTH, seed=None, biome=None, title=False, desktop=False, difficulty="balanced") -> None:
+    def __init__(self, level_id=None, run_length=S.RUN_LENGTH, seed=None, biome=None, title=False, desktop=False, difficulty="balanced", profile_store=None) -> None:
         pygame.display.set_caption("Shroud")
         self.desktop = Desktop() if desktop else None
+        from shroud.audio import Audio
+        self.audio = Audio() if desktop else None
+        self.practice = False
         self.menu = Menu()
+        self.menu.sound_enabled = bool(self.audio and self.audio.enabled)
         if difficulty not in DIFFICULTIES: raise ValueError("Unknown difficulty")
         self.menu.difficulty = difficulty
         self.menu_open = title
@@ -289,6 +411,7 @@ class Game:
         self.clock = pygame.time.Clock()
         self.run_rng = random.Random(seed)
         self.rewards = RunRewards(random.Random(seed))
+        self.profile_store = profile_store
         self.history = RunHistory()
         self.choice = None
         self.reward_notice = ""
@@ -300,11 +423,23 @@ class Game:
         self.debug = False
         self._load_current()
 
+        if not title:
+            self.start_recording()
+
+    def start_recording(self):
+        if self.practice:
+            return
+        self.history.sink = getattr(self, "profile_store", None)
+        if self.history.recording:
+            self.history.forward("begin_run")
+            for row in self.history.records:
+                self.history.forward("record", row)
+
     def _load_current(self):
         """Build a random biome for this run slot before replacing the current scene."""
         world = Sandbox(room=Room(self.run_state.load_current()), rewards=self.rewards,
                         history=self.history, progress=(self.run_state.index + 1, len(self.run_state.level_ids)),
-                        difficulty=self.menu.difficulty)
+                        difficulty=self.menu.difficulty, practice=self.practice)
         world.difficulty = self.menu.difficulty
         for enemy in world.enemies:
             enemy.difficulty = DIFFICULTIES[self.menu.difficulty][2:]
@@ -320,6 +455,8 @@ class Game:
         self.reward_notice = ""
         self.reward_notice_time = 0.0
         self.selection = LEVEL_IDS.index(self.run_state.current)
+        if self.audio:
+            self.audio.attach(world.events)
         for name in ("reward_confirmed", "burst_activated", "burst_expired"):
             world.events.subscribe(name, lambda payload, name=name: self.reward_notification(name, payload))
         self.selector_biome = self.biome_override
@@ -331,6 +468,7 @@ class Game:
         new_run = Run(self.run_length, first=level_id, rng=self.run_rng, biome=chosen)
         previous, previous_biome = self.run_state, self.biome_override
         previous_rewards = self.rewards
+        previous_world = self.world
         previous_history = self.history
         self.history = RunHistory()
         self.rewards = RunRewards(self.rewards.rng)
@@ -342,6 +480,10 @@ class Game:
             self.rewards = previous_rewards
             self.history = previous_history
             raise
+
+        if previous_history.recording:
+            previous_world.sample_area(force=True)
+        self.start_recording()
 
     def advance(self):
         if not self.world.complete or self.run_state.following is None:
@@ -366,10 +508,13 @@ class Game:
         from shroud.rewards import REWARDS, RANKS
         reward = REWARDS[payload["reward"]]
         if name == "reward_confirmed":
-            suffix = f" {RANKS[payload['rank']]} acquired" if reward.category == "technique" else " stored / Q to activate"
+            suffix = f" {RANKS[payload['rank']]} acquired" if reward.category == "technique" else " stored"
         else:
             suffix = " activated / 10 seconds" if name == "burst_activated" else " expired"
         self.reward_notice = reward.name + suffix
+        if self.world.difficulty != "demanding" and reward.category == "technique":
+            from shroud.rewards import TECHNIQUE_HELP
+            self.reward_notice = TECHNIQUE_HELP[payload["reward"]]
         self.reward_notice_time = 3.0
 
     def open_cache(self):
@@ -395,7 +540,10 @@ class Game:
                     and any(event.type == pygame.KEYDOWN
                             and event.key in tuple(pygame.key.key_code(key) for key in S.BINDINGS["interact"])
                             and not getattr(event, "repeat", False) for event in events)):
-                self.open_cache()
+                if self.world.difficulty == "balanced" and self.rewards.stored and nearby_cache(self.world) is None:
+                    self.rewards.activate(self.world.events)
+                else:
+                    self.open_cache()
                 self.cancel_combat_input()
                 return True
             return False
@@ -439,7 +587,7 @@ class Game:
         if not self.menu_open:
             if (not self.choice and not self.selecting and not self.map_open
                     and any(e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE for e in events)):
-                self.menu.page, self.menu.focus = "pause", 0
+                self.menu.page, self.menu.focus = ("title" if self.practice else "pause"), 0
                 self.menu_open = self.paused = True
                 self.cancel_combat_input()
                 return True
@@ -449,9 +597,25 @@ class Game:
         page = self.menu.page
         if result and result.startswith('Reduce motion:'):
             self.menu.reduced_motion = not self.menu.reduced_motion
-        elif result == 'Play': self.menu.back = page; self.menu.page = 'difficulty'
+        elif result == 'Toggle fullscreen' and self.desktop:
+            self.desktop.toggle_fullscreen()
+        elif result and result.startswith("Sound"):
+            if self.audio:
+                self.audio.toggle()
+                self.menu.sound_enabled = self.audio.enabled
+        elif result == "Tutorial":
+            if not self.practice:
+                self.practice_prior_biome = self.biome_override
+            self.practice = True
+            self.menu.difficulty = "gentle"
+            self.load("training_01", biome_override="grounds")
+            self.menu_open = self.paused = False
+        elif result == 'Play': self.menu.back = 'title' if page == 'trained' else page; self.menu.page = 'difficulty'
         elif result in ('Gentle', 'Balanced', 'Demanding'):
             self.menu.difficulty = result.lower()
+            if self.practice:
+                self.biome_override = self.practice_prior_biome
+                self.practice = False
             self.load('training_01')
             self.menu_open = self.paused = False
         elif result == "New journey": self.menu.back = page; self.menu.page = "difficulty"
@@ -468,13 +632,14 @@ class Game:
             self.menu.page = result.lower()
         elif result == 'Restart level':
             if page == 'restart':
+                self.world.sample_area(force=True)
                 self.rewards.reset(); self.history.clear(); self._load_current()
                 self.menu_open = self.paused = False
             else: self.menu.page = 'restart'
         elif result == 'Quit': self.menu.back = page; self.menu.page = 'quit'
         elif result == 'Quit game': self.exit_requested = True
         elif result in ('back','Back','Cancel'):
-            self.menu.page = 'pause' if page == 'restart' else self.menu.back
+            self.menu.page = 'title' if page == 'trained' else 'pause' if page == 'restart' else self.menu.back
         if result: self.menu.focus = 0
         self.cancel_combat_input()
         return True
@@ -501,6 +666,8 @@ class Game:
                 pending.clear()
                 accumulator = 0
             for command in inputs.commands:
+                if getattr(self, "practice", False) and command.action in ("map", "select_level", "debug", "reset", "pause"):
+                    continue
                 if command.action == "map" and not self.selecting:
                     self.map_open = not self.map_open
                     blocked_frame = True
@@ -548,6 +715,7 @@ class Game:
                     blocked_frame = True
                     break
                 elif command.action == "reset":
+                    self.world.sample_area(force=True)
                     self.rewards.reset()
                     self.history.clear()
                     self._load_current()
@@ -611,8 +779,19 @@ class Game:
                     self.renderer.reward_ui.overlay(self.screen, self.world, self.choice)
                 elif self.paused and not self.selecting and not self.map_open:
                     self.renderer.reward_ui.details(self.screen, self.world)
+            if getattr(self, "practice", False) and not self.menu_open and any(c.claimed for c in self.world.caches):
+                self.menu.page, self.menu.focus = "trained", 0
+                self.menu_open = self.paused = True
             if getattr(self,"desktop",None) and not self.menu_open and (self.world.complete or not self.world.player.alive):
                 self.menu.page = ("complete" if self.run_state.following else "finished") if self.world.complete else "retry"
+                if self.menu.page == "finished":
+                    self.menu.profile_stats = None
+                    if self.profile_store and self.profile_store.enabled:
+                        import sqlite3
+                        try:
+                            self.menu.profile_stats = self.profile_store.profile()
+                        except sqlite3.Error:
+                            pass  # A profile read failure must still allow a new journey.
                 self.menu.focus = 0
                 self.menu_open = self.paused = True
             if getattr(self, "menu_open", False):
